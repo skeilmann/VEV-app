@@ -102,6 +102,14 @@ app.post('/api/sync-favorites', async (req, res) => {
           fields: ['id', 'variants'],
         });
 
+        console.log('Fetched product data:', {
+          productId,
+          product: product ? {
+            id: product.id,
+            variants: product.variants.map(v => ({ id: v.id, title: v.title }))
+          } : null
+        });
+
         if (!product) {
           console.warn(`Product ${productId} not found`);
           continue;
@@ -114,6 +122,12 @@ app.post('/api/sync-favorites', async (req, res) => {
           console.warn(`No variants found for product ${productId}`);
           continue;
         }
+
+        console.log('Selected variant:', {
+          productId,
+          variantId,
+          variantTitle: product.variants[0]?.title
+        });
 
         // Store the variant ID with the product in the exact format
         savedMap[productId] = [variantId.toString()];
