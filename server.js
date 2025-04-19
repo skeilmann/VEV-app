@@ -31,6 +31,16 @@ module.exports = shopify;
 app.use(cors());
 app.use(express.json());
 
+// Security middleware: API key check
+app.use('/api', (req, res, next) => {
+  const clientKey = req.headers['x-api-key'];
+  const serverKey = process.env.API_SECRET_KEY;
+  if (!serverKey || clientKey !== serverKey) {
+    return res.status(403).json({ success: false, message: 'Forbidden: Invalid API key' });
+  }
+  next();
+});
+
 // Routes
 app.use('/api', syncFavoritesRouter);
 
