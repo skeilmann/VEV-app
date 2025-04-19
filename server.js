@@ -4,7 +4,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const syncFavoritesRouter = require('./routes/syncFavorites');
-const { shopifyApi, LATEST_API_VERSION } = require('@shopify/shopify-api');
+const { shopifyApi, LATEST_API_VERSION, restResources } = require('@shopify/shopify-api');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -23,6 +23,7 @@ const shopify = shopifyApi({
     'read_customer_metafields',
     'write_customer_metafields'
   ],
+  restResources,
 });
 
 module.exports = shopify;
@@ -45,7 +46,7 @@ app.use('/api', (req, res, next) => {
 app.use('/api', syncFavoritesRouter);
 
 const { Session } = require('@shopify/shopify-api');
-const { Metafield } = require('@shopify/shopify-api/rest/admin/2023-10');
+const Metafield = shopify.rest.Metafield;
 
 app.post('/api/sync-favorites', async (req, res) => {
   const { customerId, favorites } = req.body;
