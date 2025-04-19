@@ -107,7 +107,7 @@ app.post('/api/sync-favorites', async (req, res) => {
           continue;
         }
 
-        // Get the first variant ID (or handle multiple variants as needed)
+        // Get the first variant ID
         const variantId = product.variants[0]?.id;
         
         if (!variantId) {
@@ -115,25 +115,13 @@ app.post('/api/sync-favorites', async (req, res) => {
           continue;
         }
 
-        // Store the variant ID with the product
-        if (!savedMap[productId]) {
-          savedMap[productId] = [];
-        }
-
-        const variantIdStr = variantId.toString();
-        if (!savedMap[productId].includes(variantIdStr)) {
-          savedMap[productId].push(variantIdStr);
-        }
+        // Store the variant ID with the product in the exact format
+        savedMap[productId] = [variantId.toString()];
       } catch (error) {
         console.error(`Error fetching product ${productId}:`, error);
         continue;
       }
     }
-
-    // Sort variant IDs for consistency
-    Object.keys(savedMap).forEach(productId => {
-      savedMap[productId] = savedMap[productId].sort((a, b) => a - b);
-    });
 
     const mergedData = {
       saved: savedMap,
