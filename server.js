@@ -47,6 +47,7 @@ app.use('/api', syncFavoritesRouter);
 
 const { Session } = require('@shopify/shopify-api');
 const Metafield = shopify.rest.Metafield;
+const Product = shopify.rest.Product;
 
 app.post('/api/sync-favorites', async (req, res) => {
   const { customerId, favorites } = req.body;
@@ -85,13 +86,53 @@ app.post('/api/sync-favorites', async (req, res) => {
     });
 
     const savedMap = { ...existingData.saved };
-    favorites.forEach(({ productId, variantId }) => {
-      if (!savedMap[productId]) {
-        savedMap[productId] = [];
+
+    // Process each favorite and fetch its variants
+    for (const { productId } of favorites) {
+      if (!productId) {
+        console.warn('Skipping favorite: missing productId');
+        continue;
       }
-      if (variantId && !savedMap[productId].includes(variantId)) {
-        savedMap[productId].push(variantId);
+
+      try {
+        // Fetch the product with its variants
+        const product = await Product.find({
+          session,
+          id: productId,
+          fields: ['id', 'variants'],
+        });
+
+        if (!product) {
+          console.warn(`Product ${productId} not found`);
+          continue;
+        }
+
+        // Get the first variant ID (or handle multiple variants as needed)
+        const variantId = product.variants[0]?.id;
+        
+        if (!variantId) {
+          console.warn(`No variants found for product ${productId}`);
+          continue;
+        }
+
+        // Store the variant ID with the product
+        if (!savedMap[productId]) {
+          savedMap[productId] = [];
+        }
+
+        const variantIdStr = variantId.toString();
+        if (!savedMap[productId].includes(variantIdStr)) {
+          savedMap[productId].push(variantIdStr);
+        }
+      } catch (error) {
+        console.error(`Error fetching product ${productId}:`, error);
+        continue;
       }
+    }
+
+    // Sort variant IDs for consistency
+    Object.keys(savedMap).forEach(productId => {
+      savedMap[productId] = savedMap[productId].sort((a, b) => a - b);
     });
 
     const mergedData = {
