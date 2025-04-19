@@ -1,6 +1,14 @@
 console.log('Starting server...');
 console.trace('Tracking module import...');
 require('dotenv').config();
+
+// Log environment variables (without sensitive data)
+console.log('Environment check:', {
+  PORT: process.env.PORT,
+  SHOPIFY_SHOP: process.env.SHOPIFY_SHOP,
+  API_SECRET_KEY: process.env.API_SECRET_KEY ? 'Set' : 'Not Set'
+});
+
 const express = require('express');
 const cors = require('cors');
 const syncFavoritesRouter = require('./routes/syncFavorites');
@@ -34,12 +42,60 @@ app.use(express.json());
 
 // Security middleware: API key check
 app.use('/api', (req, res, next) => {
-  const clientKey = req.headers['x-api-key'];
+  const clientKey = decodeURIComponent(req.headers['x-api-key'] || '');
   const serverKey = process.env.API_SECRET_KEY;
-  if (!serverKey || clientKey !== serverKey) {
+  
+  console.log('API Key Check:', {
+    clientKeyLength: clientKey?.length,
+    serverKeyLength: serverKey?.length,
+    match: clientKey === serverKey
+  });
+
+  if (!serverKey) {
+    console.error('Server API key is not set');
+    return res.status(500).json({ success: false, message: 'Server configuration error' });
+  }
+
+  if (!clientKey || clientKey.trim() !== serverKey.trim()) {
+    console.error('Invalid API key match');
     return res.status(403).json({ success: false, message: 'Forbidden: Invalid API key' });
   }
+  
   next();
+});
+
+// Get current favorites endpoint
+app.get('/api/favorites/:customerId', async (req, res) => {
+  const { customerId } = req.params;
+
+  try {
+    const session = new Session({
+      id: 'offline',
+      shop: process.env.SHOPIFY_SHOP,
+      state: 'active',
+      isOnline: false,
+      accessToken: process.env.SHOPIFY_ADMIN_API_ACCESS_TOKEN,
+      scope: 'read_customers,write_customers,read_customer_metafields,write_customer_metafields'
+    });
+
+    const existingMetafields = await Metafield.all({
+      session,
+      owner_resource: 'customer',
+      owner_id: customerId,
+    });
+
+    const existingMeta = existingMetafields.find(mf =>
+      mf.namespace === 'cad' && mf.key === 'customer_products'
+    );
+
+    res.json({
+      success: true,
+      data: existingMeta ? JSON.parse(existingMeta.value) : null
+    });
+  } catch (error) {
+    console.error('Error fetching favorites:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch favorites', error: error.message });
+  }
 });
 
 // Routes
@@ -99,40 +155,44 @@ app.post('/api/sync-favorites', async (req, res) => {
         const product = await Product.find({
           session,
           id: productId,
-          fields: ['id', 'variants'],
         });
 
-        console.log('Fetched product data:', {
-          productId,
-          product: product ? {
-            id: product.id,
-            variants: product.variants.map(v => ({ id: v.id, title: v.title }))
-          } : null
+        console.log('Product details:', {
+          id: product.id,
+          title: product.title,
+          variantsCount: product.variants.length,
+          variants: product.variants.map(v => ({
+            id: v.id
+          }))
         });
 
-        if (!product) {
-          console.warn(`Product ${productId} not found`);
-          continue;
-        }
-
-        // Get the first variant ID
-        const variantId = product.variants[0]?.id;
+        // Get only the first variant ID
+        const firstVariant = product.variants[0];
         
-        if (!variantId) {
+        if (!firstVariant) {
           console.warn(`No variants found for product ${productId}`);
           continue;
         }
 
-        console.log('Selected variant:', {
+        const variantId = firstVariant.id.toString();
+
+        console.log('Selected variant for storage:', {
           productId,
           variantId,
-          variantTitle: product.variants[0]?.title
+          productTitle: product.title
         });
 
-        // Store the variant ID with the product in the exact format
-        savedMap[productId] = [variantId.toString()];
+        // Store only the first variant ID with the product
+        savedMap[productId] = [variantId];
+
+        console.log('Updated savedMap:', savedMap);
       } catch (error) {
         console.error(`Error fetching product ${productId}:`, error);
+        if (error.response?.status === 404) {
+          console.warn(`Product ${productId} not found in Shopify`);
+        } else {
+          console.error('Unexpected error:', error);
+        }
         continue;
       }
     }
