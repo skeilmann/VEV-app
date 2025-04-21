@@ -144,56 +144,36 @@ app.post('/api/sync-favorites', async (req, res) => {
     const savedMap = { ...existingData.saved };
 
     // Process each favorite and fetch its variants
-    for (const { productId } of favorites) {
+    for (const fav of favorites) {
+      const productId = fav.productId;
       if (!productId) {
         console.warn('Skipping favorite: missing productId');
         continue;
       }
 
       try {
-        // Fetch the product with its variants
         const product = await Product.find({
           session,
           id: productId,
+          fields: ['id', 'title', 'variants'],
         });
 
-        console.log('Product details:', {
-          id: product.id,
-          title: product.title,
-          variantsCount: product.variants.length,
-          variants: product.variants.map(v => ({
-            id: v.id
-          }))
-        });
-
-        // Get only the first variant ID
-        const firstVariant = product.variants[0];
-        
-        if (!firstVariant) {
+        if (!product || !Array.isArray(product.variants) || product.variants.length === 0) {
           console.warn(`No variants found for product ${productId}`);
           continue;
         }
 
-        const variantId = firstVariant.id.toString();
+        const firstVariant = product.variants[0];
+        if (firstVariant && firstVariant.id) {
+          const variantId = firstVariant.id.toString();
+          savedMap[productId] = [variantId];
 
-        console.log('Selected variant for storage:', {
-          productId,
-          variantId,
-          productTitle: product.title
-        });
-
-        // Store only the first variant ID with the product
-        savedMap[productId] = [variantId];
-
-        console.log('Updated savedMap:', savedMap);
-      } catch (error) {
-        console.error(`Error fetching product ${productId}:`, error);
-        if (error.response?.status === 404) {
-          console.warn(`Product ${productId} not found in Shopify`);
+          console.log(`Fetched variant ID for product ${productId}: ${variantId}`);
         } else {
-          console.error('Unexpected error:', error);
+          console.warn(`First variant missing or invalid for product ${productId}`);
         }
-        continue;
+      } catch (error) {
+        console.error(`Error fetching product ${productId}:`, error.message);
       }
     }
 
