@@ -143,6 +143,7 @@ app.post('/api/sync-favorites', async (req, res) => {
 
     const savedMap = { ...existingData.saved };
 
+    console.log('Incoming favorites:', favorites);
     // Process each favorite and fetch its variants
     for (const fav of favorites) {
       const productId = fav.productId;
@@ -166,9 +167,12 @@ app.post('/api/sync-favorites', async (req, res) => {
         const firstVariant = product.variants[0];
         if (firstVariant && firstVariant.id) {
           const variantId = firstVariant.id.toString();
-          savedMap[productId] = [variantId];
-
-          console.log(`Fetched variant ID for product ${productId}: ${variantId}`);
+          if (!savedMap[productId] || savedMap[productId].length === 0) {
+            savedMap[productId] = [variantId];
+            console.log(`Inserted variant ${variantId} into savedMap for product ${productId}`);
+          } else {
+            console.log(`Product ${productId} already has variants saved, skipping overwrite`);
+          }
         } else {
           console.warn(`First variant missing or invalid for product ${productId}`);
         }
