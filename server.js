@@ -159,20 +159,27 @@ app.post('/api/sync-favorites', async (req, res) => {
           fields: ['id', 'title', 'variants'],
         });
 
+        console.log(`Fetched product ${productId}:`, {
+          hasProduct: !!product,
+          variantCount: product?.variants?.length,
+          variants: product?.variants
+        });
+
         if (!product || !Array.isArray(product.variants) || product.variants.length === 0) {
           console.warn(`No variants found for product ${productId}`);
           continue;
         }
 
         const firstVariant = product.variants[0];
+        console.log(`First variant for product ${productId}:`, firstVariant);
+
         if (firstVariant && firstVariant.id) {
           const variantId = firstVariant.id.toString();
-          if (!savedMap[productId] || savedMap[productId].length === 0) {
-            savedMap[productId] = [variantId];
-            console.log(`Inserted variant ${variantId} into savedMap for product ${productId}`);
-          } else {
-            console.log(`Product ${productId} already has variants saved, skipping overwrite`);
-          }
+          console.log(`Processing variant ID for product ${productId}:`, variantId);
+          
+          // Always update the variant ID, even if it exists
+          savedMap[productId] = [variantId];
+          console.log(`Updated savedMap for product ${productId} with variant ${variantId}`);
         } else {
           console.warn(`First variant missing or invalid for product ${productId}`);
         }
