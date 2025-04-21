@@ -153,40 +153,52 @@ app.post('/api/sync-favorites', async (req, res) => {
       }
 
       try {
+        console.log(`Attempting to fetch product ${productId} from Shopify...`);
         const product = await Product.find({
           session,
           id: productId,
           fields: ['id', 'title', 'variants'],
         });
 
-        console.log(`Fetched product ${productId}:`, {
-          hasProduct: !!product,
-          variantCount: product?.variants?.length,
-          variants: product?.variants
+        if (!product) {
+          console.error(`Failed to fetch product ${productId} from Shopify`);
+          continue;
+        }
+
+        console.log(`Successfully fetched product ${productId}:`, {
+          productId: product.id,
+          title: product.title,
+          variantCount: product.variants?.length || 0
         });
 
-        if (!product || !Array.isArray(product.variants) || product.variants.length === 0) {
-          console.warn(`No variants found for product ${productId}`);
+        if (!Array.isArray(product.variants) || product.variants.length === 0) {
+          console.error(`No variants found for product ${productId}`);
           continue;
         }
 
         const firstVariant = product.variants[0];
-        console.log(`First variant for product ${productId}:`, firstVariant);
+        console.log(`First variant details for product ${productId}:`, {
+          variantId: firstVariant.id,
+          title: firstVariant.title,
+          price: firstVariant.price
+        });
 
         if (firstVariant && firstVariant.id) {
           const variantId = firstVariant.id.toString();
-          console.log(`Processing variant ID for product ${productId}:`, variantId);
+          console.log(`Setting variant ID ${variantId} for product ${productId}`);
           
-          // Always update the variant ID, even if it exists
+          // Force update the variant ID regardless of existing data
           savedMap[productId] = [variantId];
-          console.log(`Updated savedMap for product ${productId} with variant ${variantId}`);
+          console.log(`Updated savedMap for product ${productId}:`, savedMap[productId]);
         } else {
-          console.warn(`First variant missing or invalid for product ${productId}`);
+          console.error(`Invalid variant data for product ${productId}`);
         }
       } catch (error) {
-        console.error(`Error fetching product ${productId}:`, error.message);
+        console.error(`Error processing product ${productId}:`, error);
       }
     }
+
+    console.log('Final savedMap before metafield update:', savedMap);
 
     const mergedData = {
       saved: savedMap,
