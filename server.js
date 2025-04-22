@@ -139,6 +139,7 @@ app.post('/api/sync-favorites', async (req, res) => {
     console.log('Merging favorites:', {
       existingData,
       newFavorites: favorites,
+      
     });
 
     const savedMap = { ...existingData.saved };
@@ -153,7 +154,7 @@ app.post('/api/sync-favorites', async (req, res) => {
       }
 
       try {
-        console.log(`Attempting to fetch product ${productId} from Shopify...`);
+        console.log(`Fetching product ${productId} from Shopify...`);
         const product = await Product.find({
           session,
           id: productId,
@@ -165,48 +166,36 @@ app.post('/api/sync-favorites', async (req, res) => {
           continue;
         }
 
-        console.log(`Successfully fetched product ${productId}:`, {
-          productId: product.id,
-          title: product.title,
-          variantCount: product.variants?.length || 0
-        });
-
         if (!Array.isArray(product.variants) || product.variants.length === 0) {
           console.error(`No variants found for product ${productId}`);
           continue;
         }
 
         const firstVariant = product.variants[0];
-        console.log(`First variant details for product ${productId}:`, {
-          variantId: firstVariant.id,
-          title: firstVariant.title,
-          price: firstVariant.price
-        });
-
-        if (firstVariant && firstVariant.id) {
-          const variantId = firstVariant.id.toString();
-          console.log(`Setting variant ID ${variantId} for product ${productId}`);
-          
-          // Force update the variant ID regardless of existing data
-          savedMap[productId] = [variantId];
-          console.log(`Updated savedMap for product ${productId}:`, savedMap[productId]);
-        } else {
+        if (!firstVariant || !firstVariant.id) {
           console.error(`Invalid variant data for product ${productId}`);
+          continue;
         }
+
+        const variantId = firstVariant.id.toString();
+        console.log(`Found variant ${variantId} for product ${productId}`);
+        
+        // Store in the exact format: { "productId": [variantId] }
+        savedMap[productId] = [variantId];
+        console.log(`Stored in savedMap: ${productId}: [${variantId}]`);
       } catch (error) {
         console.error(`Error processing product ${productId}:`, error);
       }
     }
 
-    console.log('Final savedMap before metafield update:', savedMap);
-
+    // Ensure the data structure matches exactly
     const mergedData = {
       saved: savedMap,
       viewed: existingData.viewed || '',
       custom: existingData.custom || {},
     };
 
-    console.log('Merged result:', JSON.stringify(mergedData, null, 2));
+    console.log('Final data structure before metafield update:', JSON.stringify(mergedData, null, 2));
 
     const metafieldPayload = {
       key: 'customer_products',
