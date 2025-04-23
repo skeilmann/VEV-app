@@ -121,8 +121,8 @@ app.post('/api/sync-favorites', async (req, res) => {
       : { saved: {}, viewed: '', custom: {} };
 
     const savedMap = { ...existingData.saved };
+    console.log('Initial savedMap:', savedMap);
 
-    console.log('Incoming favorites:', favorites);
     // Process each favorite and fetch its variants
     for (const fav of favorites) {
       const productId = fav.productId;
@@ -132,7 +132,7 @@ app.post('/api/sync-favorites', async (req, res) => {
       }
 
       try {
-        console.log(`Fetching product ${productId} from Shopify...`);
+        console.log(`[DEBUG] Fetching product ${productId} from Shopify...`);
         const product = await Product.find({
           session,
           id: productId,
@@ -140,29 +140,31 @@ app.post('/api/sync-favorites', async (req, res) => {
         });
 
         if (!product) {
-          console.error(`Failed to fetch product ${productId} from Shopify`);
+          console.error(`[ERROR] Failed to fetch product ${productId} from Shopify`);
           continue;
         }
 
+        console.log(`[DEBUG] Product ${productId} variants:`, product.variants);
+
         if (!Array.isArray(product.variants) || product.variants.length === 0) {
-          console.error(`No variants found for product ${productId}`);
+          console.error(`[ERROR] No variants found for product ${productId}`);
           continue;
         }
 
         const firstVariant = product.variants[0];
         if (!firstVariant || !firstVariant.id) {
-          console.error(`Invalid variant data for product ${productId}`);
+          console.error(`[ERROR] Invalid variant data for product ${productId}`);
           continue;
         }
 
         const variantId = firstVariant.id.toString();
-        console.log(`Found variant ${variantId} for product ${productId}`);
+        console.log(`[DEBUG] Found variant ${variantId} for product ${productId}`);
         
         // Store in the exact format: { "productId": [variantId] }
         savedMap[productId] = [variantId];
-        console.log(`Stored in savedMap: ${productId}: [${variantId}]`);
+        console.log(`[DEBUG] Updated savedMap for ${productId}:`, savedMap[productId]);
       } catch (error) {
-        console.error(`Error processing product ${productId}:`, error);
+        console.error(`[ERROR] Processing product ${productId}:`, error);
       }
     }
 
@@ -172,6 +174,8 @@ app.post('/api/sync-favorites', async (req, res) => {
       viewed: existingData.viewed || '',
       custom: existingData.custom || {},
     };
+
+    console.log('[DEBUG] Final data to be stored in metafield:', JSON.stringify(mergedData, null, 2));
 
     const metafieldPayload = {
       key: 'customer_products',
@@ -184,14 +188,18 @@ app.post('/api/sync-favorites', async (req, res) => {
 
     let response;
     if (existingMeta) {
+      console.log('[DEBUG] Updating existing metafield...');
       response = await Metafield.update({
         session,
         id: existingMeta.id,
         ...metafieldPayload,
       });
     } else {
+      console.log('[DEBUG] Creating new metafield...');
       response = await new Metafield({ session }).create(metafieldPayload);
     }
+
+    console.log('[DEBUG] Metafield update response:', response);
 
     res.json({ success: true, updated: response });
   } catch (error) {
