@@ -144,7 +144,11 @@ app.post('/api/sync-favorites', async (req, res) => {
           continue;
         }
 
-        console.log(`[DEBUG] Product ${productId} variants:`, product.variants);
+        console.log(`[DEBUG] Product ${productId} data:`, {
+          id: product.id,
+          title: product.title,
+          variants: product.variants
+        });
 
         if (!Array.isArray(product.variants) || product.variants.length === 0) {
           console.error(`[ERROR] No variants found for product ${productId}`);
