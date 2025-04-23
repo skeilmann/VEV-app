@@ -1,13 +1,4 @@
-console.log('Starting server...');
-console.trace('Tracking module import...');
 require('dotenv').config();
-
-// Log environment variables (without sensitive data)
-console.log('Environment check:', {
-  PORT: process.env.PORT,
-  SHOPIFY_SHOP: process.env.SHOPIFY_SHOP,
-  API_SECRET_KEY: process.env.API_SECRET_KEY ? 'Set' : 'Not Set'
-});
 
 const express = require('express');
 const cors = require('cors');
@@ -45,19 +36,12 @@ app.use('/api', (req, res, next) => {
   const clientKey = decodeURIComponent(req.headers['x-api-key'] || '');
   const serverKey = process.env.API_SECRET_KEY;
   
-  console.log('API Key Check:', {
-    clientKeyLength: clientKey?.length,
-    serverKeyLength: serverKey?.length,
-    match: clientKey === serverKey
-  });
 
   if (!serverKey) {
-    console.error('Server API key is not set');
     return res.status(500).json({ success: false, message: 'Server configuration error' });
   }
 
   if (!clientKey || clientKey.trim() !== serverKey.trim()) {
-    console.error('Invalid API key match');
     return res.status(403).json({ success: false, message: 'Forbidden: Invalid API key' });
   }
   
@@ -136,12 +120,6 @@ app.post('/api/sync-favorites', async (req, res) => {
       ? JSON.parse(existingMeta.value)
       : { saved: {}, viewed: '', custom: {} };
 
-    console.log('Merging favorites:', {
-      existingData,
-      newFavorites: favorites,
-      
-    });
-
     const savedMap = { ...existingData.saved };
 
     console.log('Incoming favorites:', favorites);
@@ -195,8 +173,6 @@ app.post('/api/sync-favorites', async (req, res) => {
       custom: existingData.custom || {},
     };
 
-    console.log('Final data structure before metafield update:', JSON.stringify(mergedData, null, 2));
-
     const metafieldPayload = {
       key: 'customer_products',
       namespace: 'cad',
@@ -217,7 +193,6 @@ app.post('/api/sync-favorites', async (req, res) => {
       response = await new Metafield({ session }).create(metafieldPayload);
     }
 
-    console.log('Update metafield response:', response);
     res.json({ success: true, updated: response });
   } catch (error) {
     console.error('Error syncing favorites:', error);
@@ -238,8 +213,4 @@ app.use((err, req, res, next) => {
     message: 'Internal server error',
     error: process.env.NODE_ENV === 'development' ? err.message : undefined,
   });
-});
-
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
 });
