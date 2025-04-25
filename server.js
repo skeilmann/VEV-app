@@ -236,3 +236,7 @@ app.use((err, req, res, next) => {
     error: process.env.NODE_ENV === 'development' ? err.message : undefined,
   });
 });
+
+app.listen(port, () => {
+  console.log(`Server is running on port ${port}`);
+});
