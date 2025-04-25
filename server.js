@@ -136,7 +136,6 @@ app.post('/api/sync-favorites', async (req, res) => {
         const product = await Product.find({
           session,
           id: productId,
-          fields: ['id', 'title', 'variants'],
         });
 
         if (!product) {
@@ -160,10 +159,21 @@ app.post('/api/sync-favorites', async (req, res) => {
           console.error(`[ERROR] Invalid variant data for product ${productId}`);
           continue;
         }
+        console.log(`[DEBUG] firstVariant:`, firstVariant);
+console.log(`[DEBUG] firstVariant.id:`, firstVariant?.id);
 
         const variantId = firstVariant.id.toString();
         console.log(`[DEBUG] Found variant ${variantId} for product ${productId}`);
         
+
+        if (!firstVariant?.id) {
+          console.error(`[ERROR] No valid variant ID for product ${productId}`);
+        } else {
+          const variantId = firstVariant.id.toString();
+          savedMap[productId] = [variantId];
+          console.log(`[DEBUG] Updated savedMap for ${productId}:`, savedMap[productId]);
+        }
+
         // Store in the exact format: { "productId": [variantId] }
         savedMap[productId] = [variantId];
         console.log(`[DEBUG] Updated savedMap for ${productId}:`, savedMap[productId]);
