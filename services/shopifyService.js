@@ -3,7 +3,6 @@ const shopify = require('../config/shopifyClient');
 class ShopifyService {
   constructor() {
     const shop = process.env.SHOPIFY_SHOP.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    console.log('Initializing Shopify client with shop:', shop);
     
     this.client = new shopify.clients.Rest({
       session: {
@@ -15,7 +14,6 @@ class ShopifyService {
 
   async getCustomerMetafield(customerId) {
     try {
-      console.log('Fetching metafields for customer:', customerId);
       const response = await this.client.get({
         path: `customers/${customerId}/metafields.json`,
         query: {
@@ -24,7 +22,6 @@ class ShopifyService {
         },
       });
 
-      console.log('Metafields response:', JSON.stringify(response.body, null, 2));
       return response.body.metafields[0] || null;
     } catch (error) {
       console.error('Error fetching customer metafield:', {
@@ -39,7 +36,6 @@ class ShopifyService {
 
   async createCustomerMetafield(customerId, value) {
     try {
-      console.log('Creating metafield for customer:', customerId, 'with value:', JSON.stringify(value));
       const response = await this.client.post({
         path: `customers/${customerId}/metafields.json`,
         data: {
@@ -52,7 +48,6 @@ class ShopifyService {
         },
       });
 
-      console.log('Create metafield response:', JSON.stringify(response.body, null, 2));
       return response.body.metafield;
     } catch (error) {
       console.error('Error creating customer metafield:', {
@@ -67,7 +62,6 @@ class ShopifyService {
 
   async updateCustomerMetafield(customerId, metafieldId, value) {
     try {
-      console.log('Updating metafield:', metafieldId, 'for customer:', customerId, 'with value:', JSON.stringify(value));
       const response = await this.client.put({
         path: `customers/${customerId}/metafields/${metafieldId}.json`,
         data: {
@@ -77,7 +71,6 @@ class ShopifyService {
         },
       });
 
-      console.log('Update metafield response:', JSON.stringify(response.body, null, 2));
       return response.body.metafield;
     } catch (error) {
       console.error('Error updating customer metafield:', {
@@ -90,12 +83,97 @@ class ShopifyService {
     }
   }
 
-  mergeFavorites(existingData, newFavorites) {
-    console.log('Merging favorites:', {
-      existingData,
-      newFavorites
-    });
+  async fetchProductVariant(productId) {
+    try {
+      const response = await this.client.get({
+        path: `products/${productId}.json`,
+      });
+      const product = response.body.product;
+
+      if (!product) {
+        console.error(`[ERROR] Failed to fetch product ${productId} from Shopify`);
+        return null;
+      }
+
+      if (!Array.isArray(product.variants) || product.variants.length === 0) {
+        console.error(`[ERROR] No variants found for product ${productId}`);
+        return null;
+      }
+
+      const firstVariant = product.variants[0];
+      if (!firstVariant || !firstVariant.id) {
+        console.error(`[ERROR] Invalid variant data for product ${productId}`);
+        return null;
+      }
+
+      const variantId = firstVariant.id.toString();
+      return variantId;
+    } catch (error) {
+      console.error(`[ERROR] Processing product ${productId}:`, {
+        message: error.message,
+        response: error.response?.body,
+        status: error.response?.status,
+        headers: error.response?.headers
+      });
+      // Return null or throw, depending on desired error handling
+      return null; 
+    }
+  }
+  
+  async fetchAndMergeFavorites(existingData, newFavoritesInput) {
+    const mergedData = existingData || {
+      saved: {},
+      viewed: '',
+      custom: {},
+    };
+
+    // Ensure saved is an object
+    if (typeof mergedData.saved !== 'object' || mergedData.saved === null) {
+        mergedData.saved = {};
+    }
+
+    for (const fav of newFavoritesInput) {
+      const productId = fav.productId;
+      if (!productId) {
+        continue;
+      }
+
+      const variantId = await this.fetchProductVariant(productId);
+
+      if (variantId) {
+        const productIdStr = String(productId); // Ensure product ID is string for key consistency
+        const variantIdStr = String(variantId); // Ensure variant ID is string
+
+        if (!mergedData.saved[productIdStr]) {
+          mergedData.saved[productIdStr] = [];
+        }
+        
+        // Add variant only if it's not already present
+        if (!mergedData.saved[productIdStr].includes(variantIdStr)) {
+          mergedData.saved[productIdStr].push(variantIdStr);
+        }
+      }
+    }
     
+    // Overwrite the entire saved object with the desired format {productId: [variantId]}
+    // Based on the requirement from server.js logic: { "productId": [variantId] }
+    // This assumes we only want the *first* variant found for each *newly favorited* product.
+    // If merging existing variants is needed, this logic needs adjustment.
+    const finalSavedMap = { ...mergedData.saved }; 
+    for (const fav of newFavoritesInput) {
+        const productId = fav.productId;
+        if (!productId) continue;
+        const variantId = await this.fetchProductVariant(productId); // Re-fetch might be inefficient, consider storing result from loop above
+        if (variantId) {
+            finalSavedMap[String(productId)] = [String(variantId)];
+        }
+    }
+    mergedData.saved = finalSavedMap;
+
+    return mergedData;
+  }
+
+  mergeFavorites(existingData, newFavorites) {
     const mergedData = existingData || {
       saved: {},
       viewed: '',
@@ -115,7 +193,6 @@ class ShopifyService {
       }
     });
 
-    console.log('Merged result:', mergedData);
     return mergedData;
   }
 }

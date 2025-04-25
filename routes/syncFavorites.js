@@ -39,8 +39,8 @@ router.post('/sync-favorites', async (req, res) => {
       ? JSON.parse(existingMetafield.value)
       : null;
 
-    // Merge favorites
-    const mergedData = shopifyService.mergeFavorites(existingData, favorites);
+    // Merge favorites using the new async function that fetches variants
+    const mergedData = await shopifyService.fetchAndMergeFavorites(existingData, favorites);
 
     // Update or create metafield
     if (existingMetafield) {
