@@ -1,9 +1,10 @@
+console.log('Starting server...');
+console.trace('Tracking module import...');
 require('dotenv').config();
-
 const express = require('express');
 const cors = require('cors');
 const syncFavoritesRouter = require('./routes/syncFavorites');
-const { shopifyApi, LATEST_API_VERSION, restResources } = require('@shopify/shopify-api');
+const { shopifyApi, LATEST_API_VERSION } = require('@shopify/shopify-api');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -22,7 +23,6 @@ const shopify = shopifyApi({
     'read_customer_metafields',
     'write_customer_metafields'
   ],
-  restResources,
 });
 
 module.exports = shopify;
@@ -30,57 +30,6 @@ module.exports = shopify;
 // Middleware
 app.use(cors());
 app.use(express.json());
-
-// Security middleware: API key check
-app.use('/api', (req, res, next) => {
-  const clientKey = decodeURIComponent(req.headers['x-api-key'] || '');
-  const serverKey = process.env.API_SECRET_KEY;
-  
-
-  if (!serverKey) {
-    return res.status(500).json({ success: false, message: 'Server configuration error' });
-  }
-
-  if (!clientKey || clientKey.trim() !== serverKey.trim()) {
-    return res.status(403).json({ success: false, message: 'Forbidden: Invalid API key' });
-  }
-  
-  next();
-});
-
-// Get current favorites endpoint
-app.get('/api/favorites/:customerId', async (req, res) => {
-  const { customerId } = req.params;
-
-  try {
-    const session = new Session({
-      id: 'offline',
-      shop: process.env.SHOPIFY_SHOP,
-      state: 'active',
-      isOnline: false,
-      accessToken: process.env.SHOPIFY_ADMIN_API_ACCESS_TOKEN,
-      scope: 'read_customers,write_customers,read_customer_metafields,write_customer_metafields'
-    });
-
-    const existingMetafields = await Metafield.all({
-      session,
-      owner_resource: 'customer',
-      owner_id: customerId,
-    });
-
-    const existingMeta = existingMetafields.find(mf =>
-      mf.namespace === 'cad' && mf.key === 'customer_products'
-    );
-
-    res.json({
-      success: true,
-      data: existingMeta ? JSON.parse(existingMeta.value) : null
-    });
-  } catch (error) {
-    console.error('Error fetching favorites:', error);
-    res.status(500).json({ success: false, message: 'Failed to fetch favorites', error: error.message });
-  }
-});
 
 // Routes
 app.use('/api', syncFavoritesRouter);
@@ -101,5 +50,42 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
+  console.log(`Server running on port ${port}`);
+});
+
+app.post('/api/sync-favorites', async (req, res) => {
+  const { customerId, favorites } = req.body;
+
+  if (!customerId || !Array.isArray(favorites)) {
+    return res.status(400).json({ success: false, message: 'Invalid request data' });
+  }
+
+  try {
+    const savedMap = favorites.reduce((acc, fav) => {
+      acc[fav.productId] = fav.variantId ? [fav.variantId] : [];
+      return acc;
+    }, {});
+
+    const metafieldPayload = {
+      key: 'customer_products',
+      namespace: 'cad',
+      type: 'json',
+      value: JSON.stringify({
+        saved: savedMap,
+        viewed: '',
+        custom: {}
+      }),
+      owner_resource: 'customer',
+      owner_id: customerId
+    };
+
+    const { Metafield } = await import('@shopify/shopify-api/rest/admin/2023-10');
+    const metafield = new Metafield({ session: shopify.session });
+    await metafield.create(metafieldPayload);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error syncing favorites:', error);
+    res.status(500).json({ success: false, message: 'Error syncing favorites' });
+  }
 });
