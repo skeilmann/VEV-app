@@ -1,47 +1,77 @@
 console.log('Starting server...');
-console.trace('Tracking module import...');
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+
+// Route imports
 const syncFavoritesRouter = require('./routes/syncFavorites');
-const { shopifyApi, LATEST_API_VERSION } = require('@shopify/shopify-api');
+const loyaltyRouter = require('./routes/loyalty');
+const webhooksRouter = require('./routes/webhooks');
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Initialize Shopify
-const shopify = shopifyApi({
-  apiKey: process.env.SHOPIFY_API_KEY,
-  apiSecretKey: process.env.SHOPIFY_API_SECRET,
-  adminApiAccessToken: process.env.SHOPIFY_ADMIN_API_ACCESS_TOKEN,
-  hostName: process.env.SHOPIFY_SHOP.replace(/^https?:\/\//, ''),
-  apiVersion: LATEST_API_VERSION,
-  isEmbeddedApp: false,
-  scopes: [
-    'read_customers',
-    'write_customers',
-    'read_customer_metafields',
-    'write_customer_metafields'
-  ],
-});
-
-module.exports = shopify;
-
 // Middleware
 app.use(cors());
+
+// Raw body middleware for webhook HMAC verification
+// Must come before express.json() for webhook routes
+app.use('/api/webhooks', express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf.toString('utf8');
+  }
+}));
+
+// JSON body parser for all other routes
 app.use(express.json());
+
+// API Key validation middleware for non-webhook routes
+const validateApiKey = (req, res, next) => {
+  // Skip for webhooks (they use HMAC verification)
+  if (req.path.startsWith('/api/webhooks')) {
+    return next();
+  }
+
+  const apiKey = req.headers['x-api-key'];
+  const validKey = process.env.API_SECRET_KEY;
+
+  if (!validKey) {
+    console.warn('API_SECRET_KEY not configured, skipping API key validation');
+    return next();
+  }
+
+  if (apiKey !== validKey) {
+    return res.status(401).json({
+      success: false,
+      message: 'Invalid or missing API key',
+    });
+  }
+
+  next();
+};
+
+// Apply API key validation to /api routes (except webhooks)
+app.use('/api/loyalty', validateApiKey);
+app.use('/api/sync-favorites', validateApiKey);
 
 // Routes
 app.use('/api', syncFavoritesRouter);
+app.use('/api/loyalty', loyaltyRouter);
+app.use('/api/webhooks', webhooksRouter);
 
 // Health check endpoint
 app.get('/ping', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    version: '2.0.0',
+    features: ['favorites', 'loyalty'],
+  });
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error('Unhandled error:', err.stack);
   res.status(500).json({
     success: false,
     message: 'Internal server error',
@@ -51,41 +81,12 @@ app.use((err, req, res, next) => {
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
-});
-
-app.post('/api/sync-favorites', async (req, res) => {
-  const { customerId, favorites } = req.body;
-
-  if (!customerId || !Array.isArray(favorites)) {
-    return res.status(400).json({ success: false, message: 'Invalid request data' });
-  }
-
-  try {
-    const savedMap = favorites.reduce((acc, fav) => {
-      acc[fav.productId] = fav.variantId ? [fav.variantId] : [];
-      return acc;
-    }, {});
-
-    const metafieldPayload = {
-      key: 'customer_products',
-      namespace: 'cad',
-      type: 'json',
-      value: JSON.stringify({
-        saved: savedMap,
-        viewed: '',
-        custom: {}
-      }),
-      owner_resource: 'customer',
-      owner_id: customerId
-    };
-
-    const { Metafield } = await import('@shopify/shopify-api/rest/admin/2023-10');
-    const metafield = new Metafield({ session: shopify.session });
-    await metafield.create(metafieldPayload);
-
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error syncing favorites:', error);
-    res.status(500).json({ success: false, message: 'Error syncing favorites' });
-  }
+  console.log('Available routes:');
+  console.log('  GET  /ping - Health check');
+  console.log('  POST /api/sync-favorites - Sync customer favorites');
+  console.log('  GET  /api/loyalty/balance - Get loyalty balance');
+  console.log('  GET  /api/loyalty/config - Get loyalty configuration');
+  console.log('  POST /api/loyalty/redeem - Redeem points for discount');
+  console.log('  POST /api/webhooks/orders-paid - Shopify order paid webhook');
+  console.log('  POST /api/webhooks/refunds-create - Shopify refund webhook');
 });

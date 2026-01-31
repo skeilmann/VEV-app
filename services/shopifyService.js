@@ -130,6 +130,163 @@ class ShopifyService {
     }
   }
 
+  // ============================================
+  // Generic metafield methods (for loyalty, etc.)
+  // ============================================
+
+  /**
+   * Get shop-level metafield by namespace and key
+   */
+  async getShopMetafield(namespace, key) {
+    try {
+      console.log('Fetching shop metafield:', namespace, key);
+      const response = await this.client.get({
+        path: 'metafields.json',
+        query: {
+          namespace: namespace,
+          key: key,
+        },
+      });
+
+      const metafields = response.body.metafields || [];
+      const targetMetafield = metafields.find(mf =>
+        mf.namespace === namespace && mf.key === key
+      );
+
+      if (targetMetafield) {
+        console.log('Found shop metafield:', namespace, key);
+        return targetMetafield;
+      }
+
+      console.log(`No shop metafield found with namespace '${namespace}' and key '${key}'`);
+      return null;
+    } catch (error) {
+      console.error('Error fetching shop metafield:', {
+        message: error.message,
+        response: error.response?.body,
+        status: error.response?.status,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get customer metafield by namespace and key (generic version)
+   */
+  async getCustomerMetafieldByNamespaceKey(customerId, namespace, key) {
+    try {
+      console.log('Fetching metafield for customer:', customerId, 'namespace:', namespace, 'key:', key);
+
+      const response = await this.client.get({
+        path: `customers/${customerId}/metafields.json`,
+      });
+
+      const metafields = response.body.metafields || [];
+      const targetMetafield = metafields.find(mf =>
+        mf.namespace === namespace && mf.key === key
+      );
+
+      if (targetMetafield) {
+        console.log('Found metafield by namespace/key:', JSON.stringify(targetMetafield, null, 2));
+        return targetMetafield;
+      }
+
+      console.log(`No metafield found with namespace '${namespace}' and key '${key}' for customer ${customerId}`);
+      return null;
+    } catch (error) {
+      if (error.response && error.response.status === 404) {
+        console.warn(`Customer with ID ${customerId} not found.`);
+        throw new Error(`Customer ${customerId} not found`);
+      }
+      console.error('Error fetching customer metafield by namespace/key:', {
+        message: error.message,
+        response: error.response?.body,
+        status: error.response?.status,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Create customer metafield by namespace and key (generic version)
+   */
+  async createCustomerMetafieldByNamespaceKey(customerId, namespace, key, value, type = 'json') {
+    try {
+      console.log('Creating metafield for customer:', customerId, 'namespace:', namespace, 'key:', key);
+
+      const metafieldData = {
+        namespace: namespace,
+        key: key,
+        type: type,
+        value: JSON.stringify(value),
+      };
+
+      const response = await this.client.post({
+        path: `customers/${customerId}/metafields.json`,
+        data: {
+          metafield: metafieldData,
+        },
+      });
+
+      console.log('Create metafield response:', JSON.stringify(response.body, null, 2));
+      return response.body.metafield;
+    } catch (error) {
+      console.error('Error creating customer metafield by namespace/key:', {
+        message: error.message,
+        response: error.response?.body,
+        status: error.response?.status,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Update metafield by ID (generic version)
+   */
+  async updateMetafield(customerId, metafieldId, value) {
+    try {
+      console.log('Updating metafield:', metafieldId, 'for customer:', customerId);
+
+      // Try direct update first
+      try {
+        const response = await this.client.put({
+          path: `metafields/${metafieldId}.json`,
+          data: {
+            metafield: {
+              value: JSON.stringify(value),
+            },
+          },
+        });
+        console.log('Update metafield response (direct):', JSON.stringify(response.body, null, 2));
+        return response.body.metafield;
+      } catch (directError) {
+        console.log('Direct update failed, trying via customer endpoint...');
+        // If direct update fails, use customer endpoint
+        const response = await this.client.put({
+          path: `customers/${customerId}/metafields/${metafieldId}.json`,
+          data: {
+            metafield: {
+              value: JSON.stringify(value),
+            },
+          },
+        });
+        console.log('Update metafield response (via customer):', JSON.stringify(response.body, null, 2));
+        return response.body.metafield;
+      }
+    } catch (error) {
+      console.error('Error updating metafield:', {
+        message: error.message,
+        response: error.response?.body,
+        status: error.response?.status,
+      });
+      throw error;
+    }
+  }
+
+  // ============================================
+  // Favorites-specific methods (legacy)
+  // ============================================
+
   async mergeFavorites(existingData, newFavoriteProductIds) {
     console.log('Merging favorites:', {
       existingData,
