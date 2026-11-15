@@ -3,6 +3,7 @@
  * Handles creation of Shopify discount codes for loyalty redemption
  */
 
+const crypto = require('crypto');
 const shopify = require('../config/shopifyClient');
 
 class DiscountService {
@@ -23,8 +24,8 @@ class DiscountService {
   generateDiscountCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Removed confusing chars (0,O,1,I)
     let code = 'LOYALTY-';
-    for (let i = 0; i < 6; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    for (let i = 0; i < 8; i++) {
+      code += chars.charAt(crypto.randomInt(chars.length));
     }
     return code;
   }
@@ -35,8 +36,9 @@ class DiscountService {
    * @param {string} customerId - Customer ID for tracking
    * @returns {string|null} The discount code or null on failure
    */
-  async createLoyaltyDiscount(discountAmount, customerId) {
+  async createLoyaltyDiscount(discountAmount, customerId, attempt = 1) {
     const code = this.generateDiscountCode();
+    let priceRuleId = null;
 
     try {
       // First, create a price rule
@@ -49,8 +51,10 @@ class DiscountService {
             target_selection: 'all',
             allocation_method: 'across',
             value_type: 'fixed_amount',
-            value: `-${discountAmount}`, // Negative value for discount
-            customer_selection: 'all', // Could restrict to specific customer
+            value: `-${Number(discountAmount).toFixed(2)}`, // Negative value for discount
+            // Only the customer who spent the points can use the code
+            customer_selection: 'prerequisite',
+            prerequisite_customer_ids: [Number(customerId)],
             once_per_customer: true,
             usage_limit: 1,
             starts_at: new Date().toISOString(),
@@ -59,8 +63,7 @@ class DiscountService {
         },
       });
 
-      const priceRuleId = priceRuleResponse.body.price_rule.id;
-      console.log('Created price rule:', priceRuleId);
+      priceRuleId = priceRuleResponse.body.price_rule.id;
 
       // Then, create a discount code for that price rule
       const discountCodeResponse = await this.client.post({
@@ -72,7 +75,7 @@ class DiscountService {
         },
       });
 
-      console.log('Created discount code:', code, 'for price rule:', priceRuleId);
+      console.log('Created loyalty discount for customer', customerId, 'price rule', priceRuleId);
 
       return code;
     } catch (error) {
@@ -82,10 +85,19 @@ class DiscountService {
         status: error.response?.status,
       });
 
+      // Do not leave an orphan price rule behind
+      if (priceRuleId) {
+        try {
+          await this.client.delete({ path: `price_rules/${priceRuleId}.json` });
+        } catch (cleanupError) {
+          console.error('Could not delete orphan price rule', priceRuleId, cleanupError.message);
+        }
+      }
+
       // If discount code already exists (rare), try again with a new code
-      if (error.response?.body?.errors?.code) {
+      if (error.response?.body?.errors?.code && attempt < 3) {
         console.log('Discount code collision, retrying with new code');
-        return this.createLoyaltyDiscount(discountAmount, customerId);
+        return this.createLoyaltyDiscount(discountAmount, customerId, attempt + 1);
       }
 
       return null;

@@ -1,250 +1,113 @@
 /**
  * Webhook Routes
- * Handles Shopify webhooks for orders and refunds
+ * Shopify webhooks orders/paid (award points) and refunds/create (take back points).
+ *
+ * Every request must be signed by Shopify (HMAC of the raw body) and come from
+ * this shop. Processing errors return 500 so Shopify retries; duplicates are
+ * skipped by order ID / refund ID in loyaltyService.
  */
 
 const express = require('express');
-const crypto = require('crypto');
+const { verifyWebhookSignature } = require('../lib/webhookSignature');
 const router = express.Router();
 const shopifyService = require('../services/shopifyService');
 const LoyaltyService = require('../services/loyaltyService');
 
-// Initialize loyalty service
 const loyaltyService = new LoyaltyService(shopifyService);
 
-/**
- * Verify Shopify webhook HMAC signature
- */
-function verifyWebhookSignature(req) {
-  const hmacHeader = req.get('X-Shopify-Hmac-SHA256');
-  if (!hmacHeader) {
-    console.warn('Missing X-Shopify-Hmac-SHA256 header');
-    return false;
+const shopDomain = () => (process.env.SHOPIFY_SHOP || '').replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase();
+const shopCurrency = () => (process.env.SHOP_CURRENCY || 'MDL').toUpperCase();
+const money = (v) => {
+  const n = Number.parseFloat(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+function requireShopifyWebhook(req, res, next) {
+  const secret = process.env.SHOPIFY_WEBHOOK_SECRET || process.env.SHOPIFY_API_SECRET;
+  if (!verifyWebhookSignature(req.rawBody, req.get('X-Shopify-Hmac-SHA256'), secret)) {
+    console.warn('Webhook rejected: invalid or missing HMAC signature');
+    return res.status(401).json({ error: 'Invalid webhook signature' });
   }
-
-  const secret = process.env.SHOPIFY_API_SECRET || process.env.API_SECRET_KEY;
-  if (!secret) {
-    console.error('No API secret configured for webhook verification');
-    return false;
+  const from = (req.get('X-Shopify-Shop-Domain') || '').toLowerCase();
+  if (!shopDomain() || from !== shopDomain()) {
+    console.warn('Webhook rejected: unexpected shop domain', from);
+    return res.status(401).json({ error: 'Unexpected shop' });
   }
-
-  // req.rawBody must be set by middleware before JSON parsing
-  const rawBody = req.rawBody;
-  if (!rawBody) {
-    console.error('No raw body available for HMAC verification');
-    return false;
-  }
-
-  const calculatedHmac = crypto
-    .createHmac('sha256', secret)
-    .update(rawBody, 'utf8')
-    .digest('base64');
-
-  const valid = crypto.timingSafeEquals(
-    Buffer.from(hmacHeader),
-    Buffer.from(calculatedHmac)
-  );
-
-  if (!valid) {
-    console.warn('Webhook HMAC verification failed');
-  }
-
-  return valid;
+  next();
 }
 
+router.use(requireShopifyWebhook);
+
 /**
- * POST /api/webhooks/orders-paid
- * Award points when an order is paid
+ * Amount that earns points, in shop currency: the order total minus gift
+ * cards bought in it (those earn points when they are spent instead).
  */
+function earnableAmount(order) {
+  const total = money(order.total_price_set?.shop_money?.amount ?? order.total_price);
+  const giftCards = (order.line_items || [])
+    .filter((item) => item && item.gift_card)
+    .reduce((sum, item) => sum + money(item.price_set?.shop_money?.amount ?? item.price) * (item.quantity || 0), 0);
+  return Math.max(0, total - giftCards);
+}
+
 router.post('/orders-paid', async (req, res) => {
+  const order = req.body || {};
   try {
-    console.log('=== WEBHOOK: ORDERS PAID ===');
-
-    // Verify webhook signature (skip in development if needed)
-    if (process.env.NODE_ENV === 'production' && !verifyWebhookSignature(req)) {
-      return res.status(401).json({ error: 'Invalid webhook signature' });
+    const customerId = order.customer?.id;
+    if (!customerId) {
+      return res.status(200).json({ success: true, message: 'Skipped - guest checkout' });
     }
 
-    const order = req.body;
-
-    // Log basic order info
-    console.log('Order ID:', order.id);
-    console.log('Order Number:', order.order_number);
-    console.log('Customer:', order.customer?.id);
-    console.log('Total Price:', order.total_price);
-
-    // Validate required fields
-    if (!order.customer || !order.customer.id) {
-      console.log('No customer associated with order (guest checkout), skipping loyalty points');
-      return res.status(200).json({
-        success: true,
-        message: 'Skipped - guest checkout',
-      });
+    const amount = earnableAmount(order);
+    if (amount <= 0) {
+      return res.status(200).json({ success: true, message: 'Skipped - nothing to earn' });
     }
 
-    const customerId = order.customer.id;
-    const orderId = order.id;
-    const orderTotal = parseFloat(order.total_price) || 0;
-
-    if (orderTotal <= 0) {
-      console.log('Order total is zero or negative, skipping loyalty points');
-      return res.status(200).json({
-        success: true,
-        message: 'Skipped - zero total',
-      });
-    }
-
-    // Award points
-    const result = await loyaltyService.awardPoints(customerId, orderId, orderTotal);
-
-    if (result.duplicate) {
-      console.log('Order already processed, skipping');
-      return res.status(200).json({
-        success: true,
-        message: 'Already processed',
-      });
-    }
-
-    console.log('Points awarded:', result.points_awarded);
-    console.log('New balance:', result.new_balance);
-    console.log('Tier:', result.tier);
-
-    res.status(200).json({
-      success: true,
-      points_awarded: result.points_awarded,
-      new_balance: result.new_balance,
-      tier: result.tier,
-    });
+    const result = await loyaltyService.awardPoints(customerId, order.id, amount);
+    console.log(`orders/paid ${order.id}: customer ${customerId}, +${result.points_awarded}${result.duplicate ? ' (duplicate)' : ''}`);
+    res.status(200).json({ success: true });
   } catch (error) {
-    console.error('Error processing orders-paid webhook:', error);
-
-    // Always return 200 to prevent Shopify from retrying on application errors
-    // Log the error for investigation
-    res.status(200).json({
-      success: false,
-      error: error.message,
-    });
+    console.error(`orders/paid ${order.id} failed:`, error.message);
+    res.status(500).json({ success: false });
   }
 });
 
-/**
- * POST /api/webhooks/refunds-create
- * Reverse points when a refund is created
- */
 router.post('/refunds-create', async (req, res) => {
+  const refund = req.body || {};
   try {
-    console.log('=== WEBHOOK: REFUNDS CREATE ===');
-
-    // Verify webhook signature (skip in development if needed)
-    if (process.env.NODE_ENV === 'production' && !verifyWebhookSignature(req)) {
-      return res.status(401).json({ error: 'Invalid webhook signature' });
-    }
-
-    const refund = req.body;
-
-    // Log basic refund info
-    console.log('Refund ID:', refund.id);
-    console.log('Order ID:', refund.order_id);
-
-    // Get refund amount from transactions
-    let refundAmount = 0;
-    if (refund.transactions && Array.isArray(refund.transactions)) {
-      refundAmount = refund.transactions.reduce((sum, t) => {
-        return sum + (parseFloat(t.amount) || 0);
-      }, 0);
-    }
-
-    console.log('Refund Amount:', refundAmount);
-
-    if (refundAmount <= 0) {
-      console.log('Refund amount is zero or negative, skipping');
-      return res.status(200).json({
-        success: true,
-        message: 'Skipped - zero refund amount',
-      });
-    }
-
-    // We need to get the order to find the customer
-    // The refund webhook doesn't always include customer info
     const orderId = refund.order_id;
     if (!orderId) {
-      console.log('No order ID in refund, cannot process');
-      return res.status(200).json({
-        success: true,
-        message: 'Skipped - no order ID',
-      });
+      return res.status(200).json({ success: true, message: 'Skipped - no order ID' });
     }
 
-    // Fetch the order to get customer ID
-    // Note: This requires read_orders scope
-    let customerId;
-    try {
-      const shopify = require('../config/shopifyClient');
-      const shop = process.env.SHOPIFY_SHOP.replace(/^https?:\/\//, '').replace(/\/$/, '');
-      const client = new shopify.clients.Rest({
-        session: {
-          shop,
-          accessToken: process.env.SHOPIFY_ADMIN_API_ACCESS_TOKEN,
-        },
-      });
-
-      const orderResponse = await client.get({
-        path: `orders/${orderId}.json`,
-        query: { fields: 'customer' },
-      });
-
-      customerId = orderResponse.body.order?.customer?.id;
-    } catch (orderError) {
-      console.error('Error fetching order for refund:', orderError.message);
-      return res.status(200).json({
-        success: true,
-        message: 'Skipped - could not fetch order',
-      });
+    // Money actually returned: successful "refund" transactions in shop currency
+    let refundAmount = 0;
+    for (const t of refund.transactions || []) {
+      if (!t || t.kind !== 'refund' || t.status !== 'success') continue;
+      if (t.currency && t.currency.toUpperCase() !== shopCurrency()) {
+        console.warn(`Refund ${refund.id}: transaction in ${t.currency}, expected ${shopCurrency()}; not counted`);
+        continue;
+      }
+      refundAmount += money(t.amount);
     }
 
+    if (refundAmount <= 0) {
+      return res.status(200).json({ success: true, message: 'Skipped - zero refund amount' });
+    }
+
+    const customerId = await shopifyService.getOrderCustomerId(orderId);
     if (!customerId) {
-      console.log('No customer associated with order, skipping');
-      return res.status(200).json({
-        success: true,
-        message: 'Skipped - guest checkout',
-      });
+      return res.status(200).json({ success: true, message: 'Skipped - guest checkout' });
     }
 
-    // Reverse points
-    const result = await loyaltyService.reversePoints(customerId, orderId, refundAmount);
-
-    console.log('Points deducted:', result.points_deducted);
-    console.log('New balance:', result.new_balance);
-
-    res.status(200).json({
-      success: true,
-      points_deducted: result.points_deducted,
-      new_balance: result.new_balance,
-    });
+    const result = await loyaltyService.reversePoints(customerId, orderId, refundAmount, refund.id);
+    console.log(`refunds/create ${refund.id}: customer ${customerId}, -${result.points_deducted || 0}`);
+    res.status(200).json({ success: true });
   } catch (error) {
-    console.error('Error processing refunds-create webhook:', error);
-
-    // Always return 200 to prevent Shopify from retrying on application errors
-    res.status(200).json({
-      success: false,
-      error: error.message,
-    });
+    console.error(`refunds/create ${refund.id} failed:`, error.message);
+    res.status(500).json({ success: false });
   }
-});
-
-/**
- * GET /api/webhooks/test
- * Test endpoint to verify webhook routes are working
- */
-router.get('/test', (req, res) => {
-  res.json({
-    success: true,
-    message: 'Webhook routes are working',
-    endpoints: [
-      'POST /api/webhooks/orders-paid',
-      'POST /api/webhooks/refunds-create',
-    ],
-  });
 });
 
 module.exports = router;
+module.exports.earnableAmount = earnableAmount;

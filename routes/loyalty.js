@@ -8,6 +8,7 @@ const router = express.Router();
 const shopifyService = require('../services/shopifyService');
 const LoyaltyService = require('../services/loyaltyService');
 const discountService = require('../services/discountService');
+const { requireCustomer } = require('../lib/auth');
 
 // Initialize loyalty service with shopify service dependency
 const loyaltyService = new LoyaltyService(shopifyService);
@@ -16,16 +17,9 @@ const loyaltyService = new LoyaltyService(shopifyService);
  * GET /api/loyalty/balance
  * Get customer's loyalty status (points, tier, history)
  */
-router.get('/balance', async (req, res) => {
+router.get('/balance', requireCustomer(), async (req, res) => {
   try {
-    const { customerId } = req.query;
-
-    if (!customerId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing required parameter: customerId',
-      });
-    }
+    const customerId = req.customerId;
 
     console.log('=== LOYALTY BALANCE REQUEST ===');
     console.log('Customer ID:', customerId);
@@ -42,14 +36,13 @@ router.get('/balance', async (req, res) => {
     if (error.message.includes('not found')) {
       return res.status(404).json({
         success: false,
-        message: error.message,
+        message: 'Customer not found',
       });
     }
 
     res.status(500).json({
       success: false,
       message: 'Failed to fetch loyalty balance',
-      error: error.message,
     });
   }
 });
@@ -58,19 +51,13 @@ router.get('/balance', async (req, res) => {
  * POST /api/loyalty/redeem
  * Redeem points for a discount code
  */
-router.post('/redeem', async (req, res) => {
+router.post('/redeem', requireCustomer(), async (req, res) => {
   try {
-    const { customerId, points } = req.body;
+    const customerId = req.customerId;
+    const points = req.body?.points;
 
-    if (!customerId || !points) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing required fields: customerId and points',
-      });
-    }
-
-    const pointsToRedeem = parseInt(points, 10);
-    if (isNaN(pointsToRedeem) || pointsToRedeem <= 0) {
+    const pointsToRedeem = Number(points);
+    if (!Number.isInteger(pointsToRedeem) || pointsToRedeem <= 0) {
       return res.status(400).json({
         success: false,
         message: 'Points must be a positive number',
@@ -98,14 +85,13 @@ router.post('/redeem', async (req, res) => {
     if (error.message.includes('not found')) {
       return res.status(404).json({
         success: false,
-        message: error.message,
+        message: 'Customer not found',
       });
     }
 
     res.status(500).json({
       success: false,
       message: 'Failed to redeem points',
-      error: error.message,
     });
   }
 });
@@ -132,7 +118,6 @@ router.get('/config', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch loyalty config',
-      error: error.message,
     });
   }
 });
