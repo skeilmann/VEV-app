@@ -1,0 +1,52 @@
+# Dependencies
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation
+*.md
+!README.md
+
+# Shopify theme files (not needed in container)
+sections/
+snippets/
+templates/
+layout/
+locales/
+assets/
+config/settings_*.json
+IMG/
+LG-dev/
+other/
+
+# Build artifacts
+dist
+build
+*.log
+
+# Docker files themselves
+Dockerfile
+docker-compose.yml
+.dockerignore
+

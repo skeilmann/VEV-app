@@ -5,8 +5,13 @@
 
 const shopify = require('../config/shopifyClient');
 
+/** HTTP status of a @shopify/shopify-api error (v7 uses response.code). */
+function httpStatus(error) {
+  return error?.response?.code ?? error?.response?.status;
+}
+
 function errorInfo(error) {
-  return { message: error.message, status: error.response?.status };
+  return { message: error.message.split('\n')[0], status: httpStatus(error) };
 }
 
 class ShopifyService {
@@ -49,7 +54,7 @@ class ShopifyService {
       const metafields = response.body.metafields || [];
       return metafields.find((mf) => mf.namespace === namespace && mf.key === key) || null;
     } catch (error) {
-      if (error.response && error.response.status === 404) {
+      if (httpStatus(error) === 404) {
         throw new Error(`Customer ${customerId} not found`);
       }
       console.error('Error fetching customer metafield', customerId, namespace, key, errorInfo(error));
@@ -99,3 +104,4 @@ class ShopifyService {
 }
 
 module.exports = new ShopifyService();
+module.exports.httpStatus = httpStatus;

@@ -104,3 +104,10 @@ test('gift cards bought in an order do not earn points; shop currency is used', 
     400
   );
 });
+
+test('Shopify 404 errors are recognised (shopify-api v7 puts the status in response.code)', () => {
+  const { HttpResponseError } = require('@shopify/shopify-api');
+  const { httpStatus } = require('../services/shopifyService');
+  const error = new HttpResponseError({ message: 'Not Found', code: 404, statusText: 'Not Found', body: {}, headers: {} });
+  assert.equal(httpStatus(error), 404);
+});

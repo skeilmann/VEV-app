@@ -31,7 +31,7 @@ router.get('/balance', requireCustomer(), async (req, res) => {
       ...status,
     });
   } catch (error) {
-    console.error('Error fetching loyalty balance:', error);
+    console.error('Error fetching loyalty balance:', error.message.split('\n')[0]);
 
     if (error.message.includes('not found')) {
       return res.status(404).json({
@@ -80,7 +80,7 @@ router.post('/redeem', requireCustomer(), async (req, res) => {
 
     res.json(result);
   } catch (error) {
-    console.error('Error redeeming points:', error);
+    console.error('Error redeeming points:', error.message.split('\n')[0]);
 
     if (error.message.includes('not found')) {
       return res.status(404).json({
@@ -113,7 +113,7 @@ router.get('/config', async (req, res) => {
       redemption: config.redemption,
     });
   } catch (error) {
-    console.error('Error fetching loyalty config:', error);
+    console.error('Error fetching loyalty config:', error.message.split('\n')[0]);
 
     res.status(500).json({
       success: false,
