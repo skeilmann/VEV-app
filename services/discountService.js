@@ -1,28 +1,40 @@
 /**
  * Discount Service
- * Handles creation of Shopify discount codes for loyalty redemption
+ * Creates one-time loyalty discount codes with the Admin GraphQL API
+ * (discountCodeBasicCreate, scope write_discounts).
+ *
+ * Each code: fixed amount off the order, only for the customer who redeemed
+ * the points, single use, valid 90 days.
  */
 
 const crypto = require('crypto');
-const shopify = require('../config/shopifyClient');
+
+const API_VERSION = '2026-01';
+const VALID_DAYS = 90;
+const MAX_ATTEMPTS = 3;
+
+const MUTATION = `
+  mutation LoyaltyDiscount($discount: DiscountCodeBasicInput!) {
+    discountCodeBasicCreate(basicCodeDiscount: $discount) {
+      codeDiscountNode { id }
+      userErrors { field code message }
+    }
+  }
+`;
 
 class DiscountService {
-  constructor() {
-    const shop = process.env.SHOPIFY_SHOP.replace(/^https?:\/\//, '').replace(/\/$/, '');
-
-    this.client = new shopify.clients.Rest({
-      session: {
-        shop,
-        accessToken: process.env.SHOPIFY_ADMIN_API_ACCESS_TOKEN,
-      },
-    });
+  constructor({ fetchImpl = (...args) => fetch(...args), env = process.env } = {}) {
+    this.fetch = fetchImpl;
+    this.env = env;
   }
 
-  /**
-   * Generate a unique discount code
-   */
+  get endpoint() {
+    const shop = (this.env.SHOPIFY_SHOP || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    return `https://${shop}/admin/api/${API_VERSION}/graphql.json`;
+  }
+
   generateDiscountCode() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Removed confusing chars (0,O,1,I)
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I
     let code = 'LOYALTY-';
     for (let i = 0; i < 8; i++) {
       code += chars.charAt(crypto.randomInt(chars.length));
@@ -30,119 +42,68 @@ class DiscountService {
     return code;
   }
 
-  /**
-   * Create a one-time use loyalty discount code
-   * @param {number} discountAmount - Discount value in store currency
-   * @param {string} customerId - Customer ID for tracking
-   * @returns {string|null} The discount code or null on failure
-   */
-  async createLoyaltyDiscount(discountAmount, customerId, attempt = 1) {
-    const code = this.generateDiscountCode();
-    let priceRuleId = null;
-
-    try {
-      // First, create a price rule
-      const priceRuleResponse = await this.client.post({
-        path: 'price_rules.json',
-        data: {
-          price_rule: {
-            title: `Loyalty Reward - Customer ${customerId}`,
-            target_type: 'line_item',
-            target_selection: 'all',
-            allocation_method: 'across',
-            value_type: 'fixed_amount',
-            value: `-${Number(discountAmount).toFixed(2)}`, // Negative value for discount
-            // Only the customer who spent the points can use the code
-            customer_selection: 'prerequisite',
-            prerequisite_customer_ids: [Number(customerId)],
-            once_per_customer: true,
-            usage_limit: 1,
-            starts_at: new Date().toISOString(),
-            ends_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(), // 90 days validity
-          },
-        },
-      });
-
-      priceRuleId = priceRuleResponse.body.price_rule.id;
-
-      // Then, create a discount code for that price rule
-      const discountCodeResponse = await this.client.post({
-        path: `price_rules/${priceRuleId}/discount_codes.json`,
-        data: {
-          discount_code: {
-            code: code,
-          },
-        },
-      });
-
-      console.log('Created loyalty discount for customer', customerId, 'price rule', priceRuleId);
-
-      return code;
-    } catch (error) {
-      console.error('Error creating loyalty discount:', {
-        message: error.message,
-        response: error.response?.body,
-        status: error.response?.status,
-      });
-
-      // Do not leave an orphan price rule behind
-      if (priceRuleId) {
-        try {
-          await this.client.delete({ path: `price_rules/${priceRuleId}.json` });
-        } catch (cleanupError) {
-          console.error('Could not delete orphan price rule', priceRuleId, cleanupError.message);
-        }
-      }
-
-      // If discount code already exists (rare), try again with a new code
-      if (error.response?.body?.errors?.code && attempt < 3) {
-        console.log('Discount code collision, retrying with new code');
-        return this.createLoyaltyDiscount(discountAmount, customerId, attempt + 1);
-      }
-
-      return null;
-    }
+  buildInput(code, discountAmount, customerId, now = new Date()) {
+    return {
+      title: `Loyalty reward ${code}`,
+      code,
+      startsAt: now.toISOString(),
+      endsAt: new Date(now.getTime() + VALID_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+      context: { customers: { add: [`gid://shopify/Customer/${customerId}`] } },
+      customerGets: {
+        value: { discountAmount: { amount: Number(discountAmount).toFixed(2), appliesOnEachItem: false } },
+        items: { all: true },
+      },
+      appliesOncePerCustomer: true,
+      usageLimit: 1,
+    };
   }
 
   /**
-   * Verify a discount code exists and is valid
-   * @param {string} code - The discount code to verify
-   * @returns {object|null} Discount info or null if not found/invalid
+   * @returns {Promise<string|null>} the code, or null when it could not be created
    */
-  async verifyDiscountCode(code) {
-    try {
-      // Search for the discount code
-      const response = await this.client.get({
-        path: 'discount_codes/lookup.json',
-        query: { code: code },
-      });
-
-      if (response.body.discount_code) {
-        const discountCode = response.body.discount_code;
-
-        // Get the associated price rule for full details
-        const priceRuleResponse = await this.client.get({
-          path: `price_rules/${discountCode.price_rule_id}.json`,
+  async createLoyaltyDiscount(discountAmount, customerId) {
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const code = this.generateDiscountCode();
+      let body;
+      try {
+        const response = await this.fetch(this.endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Shopify-Access-Token': this.env.SHOPIFY_ADMIN_API_ACCESS_TOKEN,
+          },
+          body: JSON.stringify({ query: MUTATION, variables: { discount: this.buildInput(code, discountAmount, customerId) } }),
         });
-
-        const priceRule = priceRuleResponse.body.price_rule;
-
-        return {
-          code: discountCode.code,
-          usage_count: discountCode.usage_count,
-          value: Math.abs(parseFloat(priceRule.value)),
-          value_type: priceRule.value_type,
-          ends_at: priceRule.ends_at,
-          is_valid: discountCode.usage_count < (priceRule.usage_limit || 1),
-        };
+        body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          console.error('Discount creation failed: HTTP', response.status, String(body.errors || '').slice(0, 200));
+          return null;
+        }
+      } catch (error) {
+        console.error('Discount creation failed:', error.message);
+        return null;
       }
 
-      return null;
-    } catch (error) {
-      console.error('Error verifying discount code:', error.message);
-      return null;
+      if (body.errors) {
+        console.error('Discount creation GraphQL errors:', JSON.stringify(body.errors).slice(0, 300));
+        return null;
+      }
+
+      const result = body.data && body.data.discountCodeBasicCreate;
+      const userErrors = (result && result.userErrors) || [];
+      if (result && result.codeDiscountNode && userErrors.length === 0) {
+        console.log('Created loyalty discount for customer', customerId, result.codeDiscountNode.id);
+        return code;
+      }
+
+      const codeTaken = userErrors.some((e) => (e.field || []).includes('code'));
+      console.error('Discount creation user errors:', JSON.stringify(userErrors).slice(0, 300));
+      if (!codeTaken) return null;
+      console.log('Discount code collision, retrying with a new code');
     }
+    return null;
   }
 }
 
 module.exports = new DiscountService();
+module.exports.DiscountService = DiscountService;
